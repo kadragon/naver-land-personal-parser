@@ -20,6 +20,11 @@ def make_article() -> Article:
         confirm_date="2026-02-20",
         agent_name="행복공인",
         article_desc="채광 우수",
+        tag_list='["대단지","방세개"]',
+        cp_name="매경부동산",
+        latitude=36.48654,
+        longitude=127.31807,
+        rep_img_url="/image.jpg",
         raw_json="{}",
         first_seen_at="2026-02-22T00:00:00Z",
         last_seen_at="2026-02-22T00:00:00Z",
@@ -45,6 +50,10 @@ def test_format_article_detail_contains_core_fields() -> None:
     assert "매물번호: 1" in output
     assert "단지: 집현파크" in output
     assert "가격: 4억 5,000" in output
+    assert "태그: [\"대단지\",\"방세개\"]" in output
+    assert "플랫폼: 매경부동산" in output
+    assert "좌표: 36.48654, 127.31807" in output
+    assert "대표이미지: /image.jpg" in output
 
 
 def test_format_stats_renders_consistent_layout() -> None:

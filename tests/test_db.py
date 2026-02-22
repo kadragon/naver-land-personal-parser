@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nland.db import connect, get_article, get_stats, init_db, list_articles, mark_inactive, upsert_article
+from nland.db import (
+    connect,
+    get_article,
+    get_last_fetched_at,
+    get_stats,
+    init_db,
+    list_articles,
+    mark_inactive,
+    set_last_fetched_at,
+    upsert_article,
+)
 from nland.models import Article
 
 
@@ -22,6 +32,11 @@ def make_article(atcl_no: str, price_raw: int, now: str, *, is_active: int = 1) 
         confirm_date="2026-02-20",
         agent_name="행복공인",
         article_desc="채광 우수",
+        tag_list='["대단지"]',
+        cp_name="매경부동산",
+        latitude=36.49,
+        longitude=127.32,
+        rep_img_url="/image.jpg",
         raw_json="{}",
         first_seen_at=now,
         last_seen_at=now,
@@ -38,7 +53,47 @@ def test_init_db_creates_article_table(tmp_path: Path) -> None:
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='article'"
         ).fetchone()
+        columns = conn.execute("PRAGMA table_info(article)").fetchall()
     assert row["name"] == "article"
+    column_names = {item["name"] for item in columns}
+    assert {"tag_list", "cp_name", "latitude", "longitude", "rep_img_url"} <= column_names
+
+
+def test_init_db_adds_missing_extended_columns_to_existing_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+    with connect(str(db_path)) as conn:
+        conn.execute(
+            """
+            CREATE TABLE article (
+                atcl_no TEXT PRIMARY KEY,
+                complex_no TEXT,
+                complex_name TEXT,
+                trade_type TEXT,
+                building_name TEXT,
+                floor_info TEXT,
+                price TEXT,
+                price_raw INTEGER,
+                supply_area REAL,
+                exclusive_area REAL,
+                direction TEXT,
+                confirm_date TEXT,
+                agent_name TEXT,
+                article_desc TEXT,
+                raw_json TEXT,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                is_active INTEGER DEFAULT 1
+            )
+            """
+        )
+        conn.commit()
+
+    init_db(str(db_path))
+
+    with connect(str(db_path)) as conn:
+        columns = conn.execute("PRAGMA table_info(article)").fetchall()
+    column_names = {item["name"] for item in columns}
+    assert {"tag_list", "cp_name", "latitude", "longitude", "rep_img_url"} <= column_names
 
 
 def test_upsert_insert_and_update_preserves_first_seen(tmp_path: Path) -> None:
@@ -127,3 +182,19 @@ def test_get_stats_returns_aggregate_values(tmp_path: Path) -> None:
     assert stats["min_price"] == 40000
     assert stats["max_price"] == 50000
     assert stats["avg_price"] == 45000.0
+
+
+def test_fetch_state_upsert_and_get(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+    init_db(str(db_path))
+
+    with connect(str(db_path)) as conn:
+        assert get_last_fetched_at(conn, "sejong-jiphyeon-dong") is None
+
+        set_last_fetched_at(conn, "sejong-jiphyeon-dong", "2026-02-22T10:00:00Z")
+        conn.commit()
+        assert get_last_fetched_at(conn, "sejong-jiphyeon-dong") == "2026-02-22T10:00:00Z"
+
+        set_last_fetched_at(conn, "sejong-jiphyeon-dong", "2026-02-22T12:00:00Z")
+        conn.commit()
+        assert get_last_fetched_at(conn, "sejong-jiphyeon-dong") == "2026-02-22T12:00:00Z"

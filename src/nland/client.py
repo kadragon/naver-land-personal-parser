@@ -54,7 +54,23 @@ class NaverLandClient:
         lat: float = 36.499226,
         lon: float = 127.329209,
         z: int = 14,
+        span: float = 0.02,
+        p_cortar_no: str | None = None,
+        cidx: int = 0,
+        btm: float | None = None,
+        lft: float | None = None,
+        top: float | None = None,
+        rgt: float | None = None,
     ) -> list[dict]:
+        if btm is None:
+            btm = lat - span
+        if lft is None:
+            lft = lon - span
+        if top is None:
+            top = lat + span
+        if rgt is None:
+            rgt = lon + span
+
         page = 1
         collected: list[dict] = []
 
@@ -68,6 +84,12 @@ class NaverLandClient:
                     "lat": lat,
                     "lon": lon,
                     "z": z,
+                    "btm": btm,
+                    "lft": lft,
+                    "top": top,
+                    "rgt": rgt,
+                    "pCortarNo": p_cortar_no if p_cortar_no is not None else cortar_no,
+                    "cidx": cidx,
                     "page": page,
                 },
             )

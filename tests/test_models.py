@@ -51,3 +51,51 @@ def test_parse_article_maps_fields_and_timestamps() -> None:
     assert article.last_seen_at == now
     assert article.is_active == 1
     assert json.loads(article.raw_json)["atclNo"] == "2429861377"
+
+
+def test_parse_article_uses_hanprc_when_prcinfo_missing() -> None:
+    now = "2026-02-22T12:00:00Z"
+    payload = {
+        "atclNo": "2609812997",
+        "hanPrc": "9억 8,000",
+        "prc": 98000,
+    }
+
+    article = parse_article(payload, now)
+
+    assert article.price == "9억 8,000"
+    assert article.price_raw == 98000
+
+
+def test_parse_article_uses_atclnm_when_hscpnm_missing() -> None:
+    now = "2026-02-22T12:00:00Z"
+    payload = {
+        "atclNo": "2609812997",
+        "atclNm": "새나루1단지자이e편한세상",
+        "prcInfo": "9억 8,000",
+    }
+
+    article = parse_article(payload, now)
+
+    assert article.complex_name == "새나루1단지자이e편한세상"
+
+
+def test_parse_article_maps_extended_metadata_fields() -> None:
+    now = "2026-02-22T12:00:00Z"
+    payload = {
+        "atclNo": "2609812997",
+        "prcInfo": "9억 8,000",
+        "tagList": ["10년이내", "대단지", "방네개이상"],
+        "cpNm": "매경부동산",
+        "lat": 36.48654,
+        "lng": 127.31807,
+        "repImgUrl": "/some/image.jpg",
+    }
+
+    article = parse_article(payload, now)
+
+    assert article.tag_list == "[\"10년이내\", \"대단지\", \"방네개이상\"]"
+    assert article.cp_name == "매경부동산"
+    assert article.latitude == 36.48654
+    assert article.longitude == 127.31807
+    assert article.rep_img_url == "/some/image.jpg"

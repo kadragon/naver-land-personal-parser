@@ -20,6 +20,11 @@ class Article:
     confirm_date: str | None
     agent_name: str | None
     article_desc: str | None
+    tag_list: str | None
+    cp_name: str | None
+    latitude: float | None
+    longitude: float | None
+    rep_img_url: str | None
     raw_json: str
     first_seen_at: str
     last_seen_at: str
@@ -77,13 +82,22 @@ def parse_article(payload: dict, now_utc: str) -> Article:
     if not atcl_no:
         raise ValueError("article id (atclNo) is required")
 
-    price = _pick(payload, "prcInfo", "price")
-    price_raw = parse_price(price) if price else None
+    price = _pick(payload, "prcInfo", "hanPrc", "price")
+    price_raw: int | None = None
+    if price:
+        price_raw = parse_price(price)
+    elif payload.get("prc") not in (None, ""):
+        price_raw = int(payload["prc"])
+        price = str(payload["prc"])
+
+    tag_list: str | None = None
+    if isinstance(payload.get("tagList"), list):
+        tag_list = json.dumps(payload["tagList"], ensure_ascii=False)
 
     return Article(
         atcl_no=atcl_no,
         complex_no=_pick(payload, "hscpNo", "complexNo"),
-        complex_name=_pick(payload, "hscpNm", "complexName"),
+        complex_name=_pick(payload, "hscpNm", "atclNm", "complexName"),
         trade_type=_pick(payload, "tradTpNm", "tradeType"),
         building_name=_pick(payload, "bildNm", "buildingName"),
         floor_info=_pick(payload, "flrInfo", "floorInfo"),
@@ -95,6 +109,11 @@ def parse_article(payload: dict, now_utc: str) -> Article:
         confirm_date=_pick(payload, "cfmYmd", "confirmDate"),
         agent_name=_pick(payload, "rltrNm", "agentName"),
         article_desc=_pick(payload, "atclFetrDesc", "articleDesc"),
+        tag_list=tag_list,
+        cp_name=_pick(payload, "cpNm", "cpName"),
+        latitude=_to_float(payload.get("lat") or payload.get("latitude")),
+        longitude=_to_float(payload.get("lng") or payload.get("lon") or payload.get("longitude")),
+        rep_img_url=_pick(payload, "repImgUrl", "repImgURL", "imageUrl"),
         raw_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
         first_seen_at=now_utc,
         last_seen_at=now_utc,

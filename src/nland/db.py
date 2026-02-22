@@ -23,12 +23,48 @@ CREATE TABLE IF NOT EXISTS article (
     confirm_date   TEXT,
     agent_name     TEXT,
     article_desc   TEXT,
+    tag_list       TEXT,
+    cp_name        TEXT,
+    latitude       REAL,
+    longitude      REAL,
+    rep_img_url    TEXT,
     raw_json       TEXT,
     first_seen_at  TEXT NOT NULL,
     last_seen_at   TEXT NOT NULL,
     is_active      INTEGER DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS fetch_state (
+    area_key        TEXT PRIMARY KEY,
+    last_fetched_at TEXT NOT NULL
+);
 """
+
+ARTICLE_COLUMN_TYPES: dict[str, str] = {
+    "atcl_no": "TEXT",
+    "complex_no": "TEXT",
+    "complex_name": "TEXT",
+    "trade_type": "TEXT",
+    "building_name": "TEXT",
+    "floor_info": "TEXT",
+    "price": "TEXT",
+    "price_raw": "INTEGER",
+    "supply_area": "REAL",
+    "exclusive_area": "REAL",
+    "direction": "TEXT",
+    "confirm_date": "TEXT",
+    "agent_name": "TEXT",
+    "article_desc": "TEXT",
+    "tag_list": "TEXT",
+    "cp_name": "TEXT",
+    "latitude": "REAL",
+    "longitude": "REAL",
+    "rep_img_url": "TEXT",
+    "raw_json": "TEXT",
+    "first_seen_at": "TEXT NOT NULL",
+    "last_seen_at": "TEXT NOT NULL",
+    "is_active": "INTEGER DEFAULT 1",
+}
 
 
 def _resolve_db_path(db_path: str) -> Path:
@@ -46,7 +82,17 @@ def connect(db_path: str) -> sqlite3.Connection:
 def init_db(db_path: str) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA_SQL)
+        _ensure_article_columns(conn)
         conn.commit()
+
+
+def _ensure_article_columns(conn: sqlite3.Connection) -> None:
+    rows = conn.execute("PRAGMA table_info(article)").fetchall()
+    existing = {row["name"] for row in rows}
+    for column, column_type in ARTICLE_COLUMN_TYPES.items():
+        if column in existing:
+            continue
+        conn.execute(f"ALTER TABLE article ADD COLUMN {column} {column_type}")
 
 
 def upsert_article(conn: sqlite3.Connection, article: Article) -> None:
@@ -72,6 +118,11 @@ def upsert_article(conn: sqlite3.Connection, article: Article) -> None:
             confirm_date = excluded.confirm_date,
             agent_name = excluded.agent_name,
             article_desc = excluded.article_desc,
+            tag_list = excluded.tag_list,
+            cp_name = excluded.cp_name,
+            latitude = excluded.latitude,
+            longitude = excluded.longitude,
+            rep_img_url = excluded.rep_img_url,
             raw_json = excluded.raw_json,
             last_seen_at = excluded.last_seen_at,
             is_active = 1
@@ -98,6 +149,11 @@ def _row_to_article(row: sqlite3.Row | None) -> Article | None:
         confirm_date=row["confirm_date"],
         agent_name=row["agent_name"],
         article_desc=row["article_desc"],
+        tag_list=row["tag_list"],
+        cp_name=row["cp_name"],
+        latitude=row["latitude"],
+        longitude=row["longitude"],
+        rep_img_url=row["rep_img_url"],
         raw_json=row["raw_json"],
         first_seen_at=row["first_seen_at"],
         last_seen_at=row["last_seen_at"],
@@ -179,3 +235,25 @@ def get_stats(conn: sqlite3.Connection) -> dict[str, int | float | None]:
         "max_price": row["max_price"],
         "avg_price": row["avg_price"],
     }
+
+
+def get_last_fetched_at(conn: sqlite3.Connection, area_key: str) -> str | None:
+    row = conn.execute(
+        "SELECT last_fetched_at FROM fetch_state WHERE area_key = ?",
+        (area_key,),
+    ).fetchone()
+    if row is None:
+        return None
+    return str(row["last_fetched_at"])
+
+
+def set_last_fetched_at(conn: sqlite3.Connection, area_key: str, fetched_at: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO fetch_state (area_key, last_fetched_at)
+        VALUES (?, ?)
+        ON CONFLICT(area_key) DO UPDATE SET
+            last_fetched_at = excluded.last_fetched_at
+        """,
+        (area_key, fetched_at),
+    )
