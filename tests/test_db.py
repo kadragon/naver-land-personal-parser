@@ -1,0 +1,129 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from nland.db import connect, get_article, get_stats, init_db, list_articles, mark_inactive, upsert_article
+from nland.models import Article
+
+
+def make_article(atcl_no: str, price_raw: int, now: str, *, is_active: int = 1) -> Article:
+    return Article(
+        atcl_no=atcl_no,
+        complex_no="100",
+        complex_name="집현파크",
+        trade_type="매매",
+        building_name="101동",
+        floor_info="5/15",
+        price="4억 5,000",
+        price_raw=price_raw,
+        supply_area=84.99,
+        exclusive_area=59.99,
+        direction="남향",
+        confirm_date="2026-02-20",
+        agent_name="행복공인",
+        article_desc="채광 우수",
+        raw_json="{}",
+        first_seen_at=now,
+        last_seen_at=now,
+        is_active=is_active,
+    )
+
+
+def test_init_db_creates_article_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+
+    init_db(str(db_path))
+
+    with connect(str(db_path)) as conn:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='article'"
+        ).fetchone()
+    assert row["name"] == "article"
+
+
+def test_upsert_insert_and_update_preserves_first_seen(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+    init_db(str(db_path))
+
+    first = make_article("1", 45000, "2026-02-22T00:00:00Z")
+    second = make_article("1", 47000, "2026-02-23T00:00:00Z")
+
+    with connect(str(db_path)) as conn:
+        upsert_article(conn, first)
+        conn.commit()
+
+        upsert_article(conn, second)
+        conn.commit()
+
+        saved = get_article(conn, "1")
+
+    assert saved is not None
+    assert saved.first_seen_at == "2026-02-22T00:00:00Z"
+    assert saved.last_seen_at == "2026-02-23T00:00:00Z"
+    assert saved.price_raw == 47000
+    assert saved.is_active == 1
+
+
+def test_list_articles_filters_by_active_and_price_range(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+    init_db(str(db_path))
+
+    a1 = make_article("1", 40000, "2026-02-22T00:00:00Z", is_active=1)
+    a2 = make_article("2", 70000, "2026-02-22T00:00:00Z", is_active=0)
+    a3 = make_article("3", 80000, "2026-02-22T00:00:00Z", is_active=1)
+
+    with connect(str(db_path)) as conn:
+        for article in (a1, a2, a3):
+            upsert_article(conn, article)
+        conn.execute("UPDATE article SET is_active = 0 WHERE atcl_no = '2'")
+        conn.commit()
+
+        active_only = list_articles(conn)
+        all_rows = list_articles(conn, include_inactive=True)
+        filtered = list_articles(conn, include_inactive=True, min_price=50000, max_price=80000)
+
+    assert [item.atcl_no for item in active_only] == ["1", "3"]
+    assert [item.atcl_no for item in all_rows] == ["1", "2", "3"]
+    assert [item.atcl_no for item in filtered] == ["2", "3"]
+
+
+def test_mark_inactive_marks_only_missing_active_items(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+    init_db(str(db_path))
+
+    with connect(str(db_path)) as conn:
+        upsert_article(conn, make_article("1", 40000, "2026-02-22T00:00:00Z"))
+        upsert_article(conn, make_article("2", 50000, "2026-02-22T00:00:00Z"))
+        conn.commit()
+
+        changed = mark_inactive(conn, {"1"}, "2026-02-23T00:00:00Z")
+        conn.commit()
+
+        a1 = get_article(conn, "1")
+        a2 = get_article(conn, "2")
+
+    assert changed == 1
+    assert a1 is not None and a1.is_active == 1
+    assert a2 is not None and a2.is_active == 0
+    assert a2.last_seen_at == "2026-02-23T00:00:00Z"
+
+
+def test_get_stats_returns_aggregate_values(tmp_path: Path) -> None:
+    db_path = tmp_path / "data.db"
+    init_db(str(db_path))
+
+    with connect(str(db_path)) as conn:
+        upsert_article(conn, make_article("1", 40000, "2026-02-22T00:00:00Z"))
+        upsert_article(conn, make_article("2", 50000, "2026-02-22T00:00:00Z"))
+        upsert_article(conn, make_article("3", 80000, "2026-02-22T00:00:00Z"))
+        conn.execute("UPDATE article SET is_active = 0 WHERE atcl_no = '3'")
+        conn.commit()
+
+        stats = get_stats(conn)
+
+    assert stats["total_count"] == 3
+    assert stats["active_count"] == 2
+    assert stats["inactive_count"] == 1
+    assert stats["min_price"] == 40000
+    assert stats["max_price"] == 50000
+    assert stats["avg_price"] == 45000.0
