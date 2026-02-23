@@ -3,36 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from nland import db
-from nland.cli import _should_skip_area_fetch, main
-from nland.models import Article
-
-
-def make_article(atcl_no: str, price_raw: int, now: str, *, is_active: int = 1) -> Article:
-    return Article(
-        atcl_no=atcl_no,
-        complex_no="100",
-        complex_name="집현파크",
-        trade_type="매매",
-        building_name="101동",
-        floor_info="5/15",
-        price="4억 5,000",
-        price_raw=price_raw,
-        supply_area=84.99,
-        exclusive_area=59.99,
-        direction="남향",
-        confirm_date="2026-02-20",
-        agent_name="행복공인",
-        article_desc="채광 우수",
-        tag_list='["대단지"]',
-        cp_name="매경부동산",
-        latitude=36.49,
-        longitude=127.32,
-        rep_img_url="/image.jpg",
-        raw_json="{}",
-        first_seen_at=now,
-        last_seen_at=now,
-        is_active=is_active,
-    )
+from nland.cli import (
+    FetchResult,
+    _fetch_area_for_interactive,
+    _should_skip_area_fetch,
+    main,
+)
+from tests.factories import make_article
 
 
 def test_fetch_collects_articles_and_prints_summary(
@@ -339,3 +316,84 @@ def test_should_not_skip_area_fetch_when_ttl_expired() -> None:
         now_utc="2026-02-22T12:00:00Z",
         ttl_hours=6,
     )
+
+
+def test_fetch_area_for_interactive_returns_cached_result_when_within_ttl(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "data.db"
+    db.init_db(str(db_path))
+    with db.connect(str(db_path)) as conn:
+        db.upsert_article(conn, make_article("1", 40000, "2026-02-22T10:00:00Z"))
+        db.set_last_fetched_at(conn, "sejong-jiphyeon-dong", "2026-02-22T10:00:00Z")
+        conn.commit()
+
+    monkeypatch.setattr("nland.cli.utc_now", lambda: "2026-02-22T12:00:00Z")
+
+    def fail_fetch(**kwargs):
+        raise AssertionError("remote fetch should be skipped")
+
+    monkeypatch.setattr("nland.cli._fetch_areas_to_db", fail_fetch)
+
+    result = _fetch_area_for_interactive(
+        db_path=str(db_path),
+        area_name="sejong-jiphyeon-dong",
+        config={"cortar_no": "3611011800"},
+        include_inactive=False,
+        min_price=None,
+        max_price=None,
+        ttl_hours=6,
+    )
+
+    assert result.skipped is True
+    assert result.article_count == 1
+    assert "Skipped network fetch for sejong-jiphyeon-dong." in result.message
+
+
+def test_fetch_area_for_interactive_calls_remote_when_cache_expired(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    db_path = tmp_path / "data.db"
+    db.init_db(str(db_path))
+    with db.connect(str(db_path)) as conn:
+        db.set_last_fetched_at(conn, "sejong-jiphyeon-dong", "2026-02-22T04:00:00Z")
+        conn.commit()
+
+    monkeypatch.setattr("nland.cli.utc_now", lambda: "2026-02-22T12:00:00Z")
+
+    called: dict[str, object] = {}
+
+    def fake_fetch_areas_to_db(*, db_path: str, areas, with_detail: bool) -> FetchResult:
+        called["db_path"] = db_path
+        called["areas"] = areas
+        called["with_detail"] = with_detail
+        return FetchResult(
+            article_count=2,
+            area_count=1,
+            inactive_count=1,
+            detail_attempted=0,
+            detail_success=0,
+            detail_failed=0,
+        )
+
+    monkeypatch.setattr("nland.cli._fetch_areas_to_db", fake_fetch_areas_to_db)
+
+    result = _fetch_area_for_interactive(
+        db_path=str(db_path),
+        area_name="sejong-jiphyeon-dong",
+        config={"cortar_no": "3611011800"},
+        include_inactive=False,
+        min_price=None,
+        max_price=None,
+        ttl_hours=6,
+    )
+
+    assert result.skipped is False
+    assert result.article_count == 2
+    assert called == {
+        "db_path": str(db_path),
+        "areas": [("sejong-jiphyeon-dong", {"cortar_no": "3611011800"})],
+        "with_detail": False,
+    }
