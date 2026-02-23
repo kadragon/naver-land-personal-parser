@@ -174,6 +174,69 @@ def _fetch_areas_to_db(
     )
 
 
+def _build_cached_fetch_result(
+    *,
+    area_name: str,
+    last_fetched_at: str | None,
+    article_count: int,
+    ttl_hours: int,
+) -> FetchResult:
+    return FetchResult(
+        article_count=article_count,
+        area_count=1,
+        inactive_count=0,
+        detail_attempted=0,
+        detail_success=0,
+        detail_failed=0,
+        skipped=True,
+        message=(
+            f"Skipped network fetch for {area_name}. "
+            f"Using cached DB data (last fetched: {last_fetched_at}, "
+            f"TTL {ttl_hours}h)."
+        ),
+    )
+
+
+def _fetch_area_for_interactive(
+    area_name: str,
+    config: dict[str, str | float | int],
+    *,
+    db_path: str,
+    include_inactive: bool,
+    min_price: int | None,
+    max_price: int | None,
+    ttl_hours: int,
+) -> FetchResult:
+    now = utc_now()
+    with connect(db_path) as conn:
+        last_fetched_at = get_last_fetched_at(conn, area_name)
+
+    if _should_skip_area_fetch(
+        last_fetched_at=last_fetched_at,
+        now_utc=now,
+        ttl_hours=ttl_hours,
+    ):
+        with connect(db_path) as conn:
+            cached_articles = list_articles(
+                conn,
+                include_inactive=include_inactive,
+                min_price=min_price,
+                max_price=max_price,
+            )
+        return _build_cached_fetch_result(
+            area_name=area_name,
+            last_fetched_at=last_fetched_at,
+            article_count=len(cached_articles),
+            ttl_hours=ttl_hours,
+        )
+
+    return _fetch_areas_to_db(
+        db_path=db_path,
+        areas=[(area_name, config)],
+        with_detail=False,
+    )
+
+
 def handle_fetch(args: argparse.Namespace) -> int:
     areas = _resolve_fetch_areas(args)
     result = _fetch_areas_to_db(
@@ -199,51 +262,21 @@ def handle_list(args: argparse.Namespace) -> int:
     if args.interactive:
         area_options = [(name, dict(config)) for name, config in FETCH_AREA_PRESETS.items()]
 
-        def fetch_selected_area(area_name: str, config: dict[str, str | float | int]) -> FetchResult:
-            now = utc_now()
-            with connect(args.db) as conn:
-                last_fetched_at = get_last_fetched_at(conn, area_name)
-
-            if _should_skip_area_fetch(
-                last_fetched_at=last_fetched_at,
-                now_utc=now,
-                ttl_hours=INTERACTIVE_FETCH_CACHE_TTL_HOURS,
-            ):
-                with connect(args.db) as conn:
-                    cached_articles = list_articles(
-                        conn,
-                        include_inactive=args.all,
-                        min_price=args.min_price,
-                        max_price=args.max_price,
-                    )
-                return FetchResult(
-                    article_count=len(cached_articles),
-                    area_count=1,
-                    inactive_count=0,
-                    detail_attempted=0,
-                    detail_success=0,
-                    detail_failed=0,
-                    skipped=True,
-                    message=(
-                        f"Skipped network fetch for {area_name}. "
-                        f"Using cached DB data (last fetched: {last_fetched_at}, "
-                        f"TTL {INTERACTIVE_FETCH_CACHE_TTL_HOURS}h)."
-                    ),
-                )
-
-            return _fetch_areas_to_db(
-                db_path=args.db,
-                areas=[(area_name, config)],
-                with_detail=False,
-            )
-
         return browse_articles(
             db_path=args.db,
             include_inactive=args.all,
             min_price=args.min_price,
             max_price=args.max_price,
             area_options=area_options,
-            fetch_area_callback=fetch_selected_area,
+            fetch_area_callback=lambda area_name, config: _fetch_area_for_interactive(
+                area_name,
+                config,
+                db_path=args.db,
+                include_inactive=args.all,
+                min_price=args.min_price,
+                max_price=args.max_price,
+                ttl_hours=INTERACTIVE_FETCH_CACHE_TTL_HOURS,
+            ),
         )
 
     init_db(args.db)

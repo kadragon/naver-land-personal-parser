@@ -5,7 +5,7 @@ import io
 import sys
 import termios
 import tty
-from typing import Callable, Protocol
+from typing import Callable, Literal, Protocol
 
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -18,6 +18,7 @@ from .formatter import format_article_detail
 from .models import Article
 
 AreaOption = tuple[str, dict[str, str | float | int]]
+BrowserMode = Literal["browse", "select_area", "select_complex"]
 
 
 class FetchResultLike(Protocol):
@@ -47,7 +48,7 @@ class BrowserState:
     complex_index: int = 0
     article_index: int = 0
     page_size: int = 12
-    mode: str = "browse"  # browse | select_area | select_complex
+    mode: BrowserMode = "browse"
     current_area_name: str | None = None
     current_complex_key: str | None = None
     status_message: str = ""
@@ -126,57 +127,22 @@ def browse_articles(
                 max_price=max_price,
             )
             complex_options = _build_complex_options(all_articles)
-            if complex_options and state.current_complex_key is None:
-                state.current_complex_key = complex_options[0].key
-            if (
-                state.current_complex_key is not None
-                and complex_options
-                and state.current_complex_key not in {item.key for item in complex_options}
-            ):
-                state.current_complex_key = complex_options[0].key
-
-            filtered_articles = _filter_articles_by_complex(all_articles, state.current_complex_key)
-            if filtered_articles:
-                state.article_index = max(0, min(state.article_index, len(filtered_articles) - 1))
-            else:
-                state.article_index = 0
-            if complex_options:
-                state.complex_index = max(0, min(state.complex_index, len(complex_options) - 1))
-            else:
-                state.complex_index = 0
-
-            console.clear()
-            if state.mode == "select_area":
-                console.print(
-                    _build_area_select_layout(
-                        area_options=area_options,
-                        state=state,
-                        include_inactive=include_inactive,
-                        min_price=min_price,
-                        max_price=max_price,
-                    )
-                )
-            elif state.mode == "select_complex":
-                console.print(
-                    _build_complex_select_layout(
-                        complex_options=complex_options,
-                        state=state,
-                        include_inactive=include_inactive,
-                        min_price=min_price,
-                        max_price=max_price,
-                    )
-                )
-            else:
-                console.print(
-                    _build_browse_layout(
-                        articles=filtered_articles,
-                        state=state,
-                        include_inactive=include_inactive,
-                        min_price=min_price,
-                        max_price=max_price,
-                        supports_area_select=supports_area_select,
-                    )
-                )
+            filtered_articles = _sync_selection_state(
+                state=state,
+                all_articles=all_articles,
+                complex_options=complex_options,
+            )
+            _render_screen(
+                console=console,
+                state=state,
+                area_options=area_options,
+                complex_options=complex_options,
+                filtered_articles=filtered_articles,
+                include_inactive=include_inactive,
+                min_price=min_price,
+                max_price=max_price,
+                supports_area_select=supports_area_select,
+            )
 
             key = reader.read_key()
             if key in ("q", "ctrl_c"):
@@ -186,78 +152,245 @@ def browse_articles(
                 continue
 
             if state.mode == "select_area":
-                if key in ("down", "j"):
-                    state.area_index = min(state.area_index + 1, max(len(area_options) - 1, 0))
-                    continue
-                if key in ("up", "k"):
-                    state.area_index = max(state.area_index - 1, 0)
-                    continue
-                if key in ("enter", " ", "s") and area_options and fetch_area_callback is not None:
-                    area_name, config = area_options[state.area_index]
-                    state.status_message = f"Fetching latest data for {area_name}..."
-                    console.clear()
-                    console.print(
-                        _build_area_select_layout(
-                            area_options=area_options,
-                            state=state,
-                            include_inactive=include_inactive,
-                            min_price=min_price,
-                            max_price=max_price,
-                        )
-                    )
-                    result = fetch_area_callback(area_name, dict(config))
-                    state.current_area_name = area_name
-                    state.status_message = _fetch_summary_line(result)
-                    state.mode = "select_complex"
-                    state.complex_index = 0
-                    state.article_index = 0
-                    state.current_complex_key = None
-                    continue
+                _handle_select_area_key(
+                    key=key,
+                    state=state,
+                    area_options=area_options,
+                    fetch_area_callback=fetch_area_callback,
+                    console=console,
+                    include_inactive=include_inactive,
+                    min_price=min_price,
+                    max_price=max_price,
+                )
                 continue
 
             if state.mode == "select_complex":
-                if key in ("down", "j"):
-                    state.complex_index = min(state.complex_index + 1, max(len(complex_options) - 1, 0))
-                    continue
-                if key in ("up", "k"):
-                    state.complex_index = max(state.complex_index - 1, 0)
-                    continue
-                if key in ("enter", " ", "s") and complex_options:
-                    chosen = complex_options[state.complex_index]
-                    state.current_complex_key = chosen.key
-                    state.mode = "browse"
-                    state.article_index = 0
-                    continue
-                if key == "a" and supports_area_select:
-                    state.mode = "select_area"
-                    continue
+                _handle_select_complex_key(
+                    key=key,
+                    state=state,
+                    complex_options=complex_options,
+                    supports_area_select=supports_area_select,
+                )
                 continue
 
-            if key in ("down", "j"):
-                state.article_index = min(state.article_index + 1, max(len(filtered_articles) - 1, 0))
-                continue
-            if key in ("up", "k"):
-                state.article_index = max(state.article_index - 1, 0)
-                continue
-            if key == "g":
-                state.article_index = 0
-                continue
-            if key == "G":
-                state.article_index = max(len(filtered_articles) - 1, 0)
-                continue
-            if key == "a" and supports_area_select:
-                state.mode = "select_area"
-                continue
-            if key == "c":
-                state.mode = "select_complex"
-                continue
-            if key == "r" and fetch_area_callback is not None and state.current_area_name is not None:
-                config = _find_area_config(area_options, state.current_area_name)
-                if config is not None:
-                    state.status_message = f"Refreshing {state.current_area_name}..."
-                    result = fetch_area_callback(state.current_area_name, dict(config))
-                    state.status_message = _fetch_summary_line(result)
-                continue
+            _handle_browse_key(
+                key=key,
+                state=state,
+                filtered_articles=filtered_articles,
+                supports_area_select=supports_area_select,
+                area_options=area_options,
+                fetch_area_callback=fetch_area_callback,
+            )
+
+
+def _sync_selection_state(
+    *,
+    state: BrowserState,
+    all_articles: list[Article],
+    complex_options: list[ComplexOption],
+) -> list[Article]:
+    if complex_options and state.current_complex_key is None:
+        state.current_complex_key = complex_options[0].key
+    if (
+        state.current_complex_key is not None
+        and complex_options
+        and state.current_complex_key not in {item.key for item in complex_options}
+    ):
+        state.current_complex_key = complex_options[0].key
+
+    filtered_articles = _filter_articles_by_complex(all_articles, state.current_complex_key)
+    if filtered_articles:
+        state.article_index = max(0, min(state.article_index, len(filtered_articles) - 1))
+    else:
+        state.article_index = 0
+
+    if complex_options:
+        state.complex_index = max(0, min(state.complex_index, len(complex_options) - 1))
+    else:
+        state.complex_index = 0
+
+    return filtered_articles
+
+
+def _render_screen(
+    *,
+    console: Console,
+    state: BrowserState,
+    area_options: list[AreaOption],
+    complex_options: list[ComplexOption],
+    filtered_articles: list[Article],
+    include_inactive: bool,
+    min_price: int | None,
+    max_price: int | None,
+    supports_area_select: bool,
+) -> None:
+    console.clear()
+    if state.mode == "select_area":
+        console.print(
+            _build_area_select_layout(
+                area_options=area_options,
+                state=state,
+                include_inactive=include_inactive,
+                min_price=min_price,
+                max_price=max_price,
+            )
+        )
+        return
+
+    if state.mode == "select_complex":
+        console.print(
+            _build_complex_select_layout(
+                complex_options=complex_options,
+                state=state,
+                include_inactive=include_inactive,
+                min_price=min_price,
+                max_price=max_price,
+            )
+        )
+        return
+
+    console.print(
+        _build_browse_layout(
+            articles=filtered_articles,
+            state=state,
+            include_inactive=include_inactive,
+            min_price=min_price,
+            max_price=max_price,
+            supports_area_select=supports_area_select,
+        )
+    )
+
+
+def _fetch_area_with_recovery(
+    *,
+    state: BrowserState,
+    area_name: str,
+    config: dict[str, str | float | int],
+    fetch_area_callback: FetchAreaCallback,
+) -> FetchResultLike | None:
+    try:
+        return fetch_area_callback(area_name, dict(config))
+    except Exception as exc:  # noqa: BLE001
+        state.status_message = f"Fetch failed: {exc}"
+        return None
+
+
+def _handle_select_area_key(
+    *,
+    key: str,
+    state: BrowserState,
+    area_options: list[AreaOption],
+    fetch_area_callback: FetchAreaCallback | None,
+    console: Console,
+    include_inactive: bool,
+    min_price: int | None,
+    max_price: int | None,
+) -> None:
+    if key in ("down", "j"):
+        state.area_index = min(state.area_index + 1, max(len(area_options) - 1, 0))
+        return
+    if key in ("up", "k"):
+        state.area_index = max(state.area_index - 1, 0)
+        return
+    if key not in ("enter", " ", "s") or not area_options or fetch_area_callback is None:
+        return
+
+    area_name, config = area_options[state.area_index]
+    state.status_message = f"Fetching latest data for {area_name}..."
+    console.clear()
+    console.print(
+        _build_area_select_layout(
+            area_options=area_options,
+            state=state,
+            include_inactive=include_inactive,
+            min_price=min_price,
+            max_price=max_price,
+        )
+    )
+    result = _fetch_area_with_recovery(
+        state=state,
+        area_name=area_name,
+        config=config,
+        fetch_area_callback=fetch_area_callback,
+    )
+    if result is None:
+        return
+
+    state.current_area_name = area_name
+    state.status_message = _fetch_summary_line(result)
+    state.mode = "select_complex"
+    state.complex_index = 0
+    state.article_index = 0
+    state.current_complex_key = None
+
+
+def _handle_select_complex_key(
+    *,
+    key: str,
+    state: BrowserState,
+    complex_options: list[ComplexOption],
+    supports_area_select: bool,
+) -> None:
+    if key in ("down", "j"):
+        state.complex_index = min(state.complex_index + 1, max(len(complex_options) - 1, 0))
+        return
+    if key in ("up", "k"):
+        state.complex_index = max(state.complex_index - 1, 0)
+        return
+    if key in ("enter", " ", "s") and complex_options:
+        chosen = complex_options[state.complex_index]
+        state.current_complex_key = chosen.key
+        state.mode = "browse"
+        state.article_index = 0
+        return
+    if key == "a" and supports_area_select:
+        state.mode = "select_area"
+
+
+def _handle_browse_key(
+    *,
+    key: str,
+    state: BrowserState,
+    filtered_articles: list[Article],
+    supports_area_select: bool,
+    area_options: list[AreaOption],
+    fetch_area_callback: FetchAreaCallback | None,
+) -> None:
+    if key in ("down", "j"):
+        state.article_index = min(state.article_index + 1, max(len(filtered_articles) - 1, 0))
+        return
+    if key in ("up", "k"):
+        state.article_index = max(state.article_index - 1, 0)
+        return
+    if key == "g":
+        state.article_index = 0
+        return
+    if key == "G":
+        state.article_index = max(len(filtered_articles) - 1, 0)
+        return
+    if key == "a" and supports_area_select:
+        state.mode = "select_area"
+        return
+    if key == "c":
+        state.mode = "select_complex"
+        return
+    if key != "r" or fetch_area_callback is None or state.current_area_name is None:
+        return
+
+    config = _find_area_config(area_options, state.current_area_name)
+    if config is None:
+        return
+
+    state.status_message = f"Refreshing {state.current_area_name}..."
+    result = _fetch_area_with_recovery(
+        state=state,
+        area_name=state.current_area_name,
+        config=config,
+        fetch_area_callback=fetch_area_callback,
+    )
+    if result is None:
+        return
+    state.status_message = _fetch_summary_line(result)
 
 
 def _fetch_summary_line(result: FetchResultLike) -> str:
