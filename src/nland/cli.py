@@ -210,25 +210,23 @@ def _fetch_area_for_interactive(
     now = utc_now()
     with connect(db_path) as conn:
         last_fetched_at = get_last_fetched_at(conn, area_name)
-
-    if _should_skip_area_fetch(
-        last_fetched_at=last_fetched_at,
-        now_utc=now,
-        ttl_hours=ttl_hours,
-    ):
-        with connect(db_path) as conn:
+        if _should_skip_area_fetch(
+            last_fetched_at=last_fetched_at,
+            now_utc=now,
+            ttl_hours=ttl_hours,
+        ):
             cached_articles = list_articles(
                 conn,
                 include_inactive=include_inactive,
                 min_price=min_price,
                 max_price=max_price,
             )
-        return _build_cached_fetch_result(
-            area_name=area_name,
-            last_fetched_at=last_fetched_at,
-            article_count=len(cached_articles),
-            ttl_hours=ttl_hours,
-        )
+            return _build_cached_fetch_result(
+                area_name=area_name,
+                last_fetched_at=last_fetched_at,
+                article_count=len(cached_articles),
+                ttl_hours=ttl_hours,
+            )
 
     return _fetch_areas_to_db(
         db_path=db_path,

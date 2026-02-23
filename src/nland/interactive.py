@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import io
+import logging
 import sys
 import termios
 import tty
@@ -19,6 +20,8 @@ from .models import Article
 
 AreaOption = tuple[str, dict[str, str | float | int]]
 BrowserMode = Literal["browse", "select_area", "select_complex"]
+LOGGER = logging.getLogger(__name__)
+FETCH_FAILURE_MESSAGE = "Fetch failed due to an unexpected error."
 
 
 class FetchResultLike(Protocol):
@@ -180,6 +183,10 @@ def browse_articles(
                 supports_area_select=supports_area_select,
                 area_options=area_options,
                 fetch_area_callback=fetch_area_callback,
+                console=console,
+                include_inactive=include_inactive,
+                min_price=min_price,
+                max_price=max_price,
             )
 
 
@@ -270,8 +277,9 @@ def _fetch_area_with_recovery(
 ) -> FetchResultLike | None:
     try:
         return fetch_area_callback(area_name, dict(config))
-    except Exception as exc:  # noqa: BLE001
-        state.status_message = f"Fetch failed: {exc}"
+    except Exception:  # noqa: BLE001
+        LOGGER.exception("interactive area fetch failed for area=%s", area_name)
+        state.status_message = FETCH_FAILURE_MESSAGE
         return None
 
 
@@ -355,6 +363,10 @@ def _handle_browse_key(
     supports_area_select: bool,
     area_options: list[AreaOption],
     fetch_area_callback: FetchAreaCallback | None,
+    console: Console,
+    include_inactive: bool,
+    min_price: int | None,
+    max_price: int | None,
 ) -> None:
     if key in ("down", "j"):
         state.article_index = min(state.article_index + 1, max(len(filtered_articles) - 1, 0))
@@ -382,6 +394,17 @@ def _handle_browse_key(
         return
 
     state.status_message = f"Refreshing {state.current_area_name}..."
+    _render_screen(
+        console=console,
+        state=state,
+        area_options=area_options,
+        complex_options=[],
+        filtered_articles=filtered_articles,
+        include_inactive=include_inactive,
+        min_price=min_price,
+        max_price=max_price,
+        supports_area_select=supports_area_select,
+    )
     result = _fetch_area_with_recovery(
         state=state,
         area_name=state.current_area_name,

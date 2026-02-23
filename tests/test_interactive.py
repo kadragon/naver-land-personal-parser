@@ -196,7 +196,8 @@ def test_browse_articles_recovers_when_area_fetch_fails(monkeypatch) -> None:
     )
 
     assert code == 0
-    assert any("Fetch failed: boom" in status for status in seen_statuses)
+    assert any("Fetch failed due to an unexpected error." in status for status in seen_statuses)
+    assert not any("boom" in status for status in seen_statuses)
 
 
 def test_browse_articles_recovers_when_refresh_fails(monkeypatch) -> None:
@@ -247,4 +248,6 @@ def test_browse_articles_recovers_when_refresh_fails(monkeypatch) -> None:
     )
 
     assert code == 0
-    assert any("Fetch failed: refresh boom" in status for status in seen_statuses)
+    assert any("Refreshing sejong-jiphyeon-dong..." in status for status in seen_statuses)
+    assert any("Fetch failed due to an unexpected error." in status for status in seen_statuses)
+    assert not any("refresh boom" in status for status in seen_statuses)
