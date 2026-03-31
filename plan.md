@@ -63,3 +63,11 @@
 > Run end-user workflows that combine client, DB, parser, and formatter.
 
 - [x] `fetch/list/detail/stats` integrate correctly including detail remote fallback
+
+## Security Fixes — naver-land-personal-parser
+
+> Fix all open GitHub security alerts for this repository.
+
+### Dependabot Alerts
+
+- [x] Upgrade Pygments from 2.19.2 to ≥2.20.0 (LOW) — ReDoS via inefficient GUID regex (GHSA-5239-wwwm-4pmq). Transitive dep via `rich`; run `uv lock --upgrade-package pygments && uv sync`
